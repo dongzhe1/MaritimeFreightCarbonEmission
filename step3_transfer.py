@@ -55,6 +55,9 @@ def process_route_group(df_group, year):
         states_visited = segment_df['State'].dropna().unique()
 
         for state in states_visited:
+            if state == start_state or state == end_state:
+                continue
+
             state_emissions = segment_df.loc[segment_df['State'] == state, 'CO2'].sum()
 
             if state_emissions > 0:
@@ -70,7 +73,7 @@ def process_route_group(df_group, year):
 
 def main_transfer():
     YEAR = 2024
-    BASE_DIR = os.path.join("./data_processed", str(YEAR))
+    BASE_DIR = os.path.join("data_processed", str(YEAR))
     INPUT_FILE = os.path.join(BASE_DIR, "step2_calculated.csv")
 
     if not os.path.exists(INPUT_FILE):

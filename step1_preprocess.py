@@ -77,9 +77,9 @@ def process_directory(input_dir, output_file, year):
 
 if __name__ == "__main__":
     YEAR = 2024
-    RAW_DATA_DIR = "E:\\AIS\\2024"
+    RAW_DATA_DIR = os.path.join("raw_data", str(YEAR))
 
-    OUTPUT_DIR = os.path.join("E:\\AIS\\data_processed", str(YEAR))
+    OUTPUT_DIR = os.path.join("data_processed", str(YEAR))
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     OUTPUT_FILE = os.path.join(OUTPUT_DIR, "step1_combined.csv")

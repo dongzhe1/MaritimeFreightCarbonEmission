@@ -28,25 +28,46 @@ def calculate_co2_per_ship(df):
     Process function applied to each ship (Group).
     Calculates CO2 and Label.
     """
-    df = df.sort_values('BaseDateTime')
-    import numpy as np
+    df = df.sort_values('BaseDateTime').reset_index(drop=True)
 
-    def calculate_distance_haversine(lat1, lon1, lat2, lon2):
-        """
-        Calculates great-circle distance (nautical miles).
-        """
-        lat1, lon1, lat2, lon2 = np.radians([lat1, lon1, lat2, lon2])
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
-        c = 2 * np.arcsin(np.sqrt(a))
-        r = 3440
-        return c * r
+    thre_sail = 1.0
+    thre_stop = 1.0
 
     v_type = df['VesselType'].iloc[0]
     ship_type = 1 if 80 <= v_type <= 89 else 0
 
-    df['Label'] = np.where(df['SOG'] < 0.5, '1', '0')
+    is_slow = df['SOG'] < 0.3
+    group_ids = (is_slow != is_slow.shift(fill_value=False)).cumsum()
+
+    stay_segments = []
+    for gid, grp in df[is_slow].groupby(group_ids[is_slow]):
+        start_i = grp.index[0]
+        end_i = grp.index[-1]
+        duration = (df.loc[end_i, 'BaseDateTime'] - df.loc[start_i, 'BaseDateTime']).total_seconds() / 3600
+        if duration >= thre_sail:
+            stay_segments.append([start_i, end_i])
+
+    merged = []
+    for seg in stay_segments:
+        if merged:
+            gap = (df.loc[seg[0], 'BaseDateTime'] - df.loc[merged[-1][1], 'BaseDateTime']).total_seconds() / 3600
+            if gap < thre_stop:
+                merged[-1][1] = seg[1]
+            else:
+                merged.append(seg)
+        else:
+            merged.append(seg)
+
+    df['Label'] = '0'
+    rows_to_drop = []
+    for start_i, end_i in merged:
+        df.loc[start_i, 'Label'] = '1'
+        df.loc[end_i, 'Label'] = '1'
+        if end_i > start_i + 1:
+            rows_to_drop.extend(list(range(start_i + 1, end_i)))
+
+    if rows_to_drop:
+        df = df.drop(index=rows_to_drop).reset_index(drop=True)
 
     df['TimeDiff'] = df['BaseDateTime'].diff().dt.total_seconds() / 3600
     df['TimeDiff'] = df['TimeDiff'].fillna(0)
@@ -58,7 +79,7 @@ def calculate_co2_per_ship(df):
     co2_values = np.zeros(len(df))
 
     is_stop = df['Label'] == '1'
-    co2_values[is_stop] = df.loc[is_stop, 'TimeDiff'] * emission_rate_stop * 3.114
+    co2_values[is_stop.values] = df.loc[is_stop, 'TimeDiff'].values * emission_rate_stop * 3.114
 
     ps = 9300 if ship_type == 0 else 9400
     emission_rate_move = ps * sfc * 1e-6
@@ -76,10 +97,8 @@ def calculate_co2_per_ship(df):
     speed_mean = (df['SOG'] + df['SOG'].shift(-1)) / 2
     speed_mean = speed_mean.replace(0, 0.1).fillna(0.1)
 
-    valid_move = is_move & (df['Label'].shift(-1) == '0')
-
     move_emissions = emission_rate_move * (distances / speed_mean.values) * 3.114
-    co2_values[valid_move] = move_emissions[valid_move]
+    co2_values[is_move.values] = move_emissions[is_move.values]
 
     df['CO2'] = co2_values
     df['CO2'] = df['CO2'].fillna(0)
@@ -167,7 +186,7 @@ def process_all_data(input_file, output_file, port_data, usa_states):
 
 if __name__ == "__main__":
     YEAR = 2024
-    BASE_DIR = os.path.join("E:\\AIS\\data_processed", str(YEAR))
+    BASE_DIR = os.path.join("data_processed", str(YEAR))
 
     INPUT_FILE = os.path.join(BASE_DIR, "step1_combined.csv")
     OUTPUT_FILE = os.path.join(BASE_DIR, "step2_calculated.csv")
