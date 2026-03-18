@@ -3,18 +3,16 @@ import numpy as np
 import geopandas as gpd
 from shapely.geometry import Point
 import os
-from tqdm import tqdm
 import warnings
-from pandarallel import pandarallel
 from sklearn.neighbors import BallTree
 
 warnings.filterwarnings('ignore')
-pandarallel.initialize(progress_bar=True)
+
+from step1_preprocess import apply_median_filter
+from step3_transfer import process_route_group
+
 
 def calculate_distance_haversine(lat1, lon1, lat2, lon2):
-    """
-    Calculates great-circle distance (nautical miles).
-    """
     lat1, lon1, lat2, lon2 = np.radians([lat1, lon1, lat2, lon2])
     dlon = lon2 - lon1
     dlat = lat2 - lat1
@@ -23,11 +21,8 @@ def calculate_distance_haversine(lat1, lon1, lat2, lon2):
     r = 3440
     return c * r
 
+
 def calculate_co2_per_ship(df):
-    """
-    Process function applied to each ship (Group).
-    Calculates CO2 and Label.
-    """
     df = df.sort_values('BaseDateTime').reset_index(drop=True)
 
     thre_sail = 1.0
@@ -105,29 +100,50 @@ def calculate_co2_per_ship(df):
 
     return df
 
-def find_nearby_ports(row, port_data, threshold=0.2):
-    """
-    Find nearest port within threshold.
-    """
-    lat = row['LAT']
-    lon = row['LON']
 
-    nearby = port_data[
-        (abs(lat - port_data['Latitude']) <= threshold) &
-        (abs(lon - port_data['Longitude']) <= threshold)
-        ]
+_OUT_COLS = ['MMSI', 'BaseDateTime', 'LAT', 'LON', 'SOG', 'VesselType',
+             'Label', 'TimeDiff', 'CO2', 'State', 'PortName']
 
-    if nearby.empty:
-        return None, None
 
-    dists = nearby.apply(lambda r: calculate_distance_haversine(lat, lon, r['Latitude'], r['Longitude']), axis=1)
-    nearest_idx = dists.idxmin()
-    return nearby.loc[nearest_idx, 'Main Port Name'], nearby.loc[nearest_idx, 'state']
+def process_single_vessel(df, gdf_states, port_data):
+    try:
+        df = calculate_co2_per_ship(df)
+
+        geometry = [Point(xy) for xy in zip(df['LON'], df['LAT'])]
+        gdf = gpd.GeoDataFrame(df.copy(), geometry=geometry, crs="EPSG:4326")
+        joined = gpd.sjoin(gdf, gdf_states[['name', 'geometry']], how='left', predicate='intersects')
+        joined = joined[~joined.index.duplicated(keep='first')]
+        df = df.copy()
+        df['State'] = joined['name'].values
+        df['PortName'] = np.nan
+
+        stops_mask = df['Label'] == '1'
+        if stops_mask.any():
+            port_lat_lon = np.radians(port_data[['Latitude', 'Longitude']].values)
+            ship_lat_lon = np.radians(df.loc[stops_mask, ['LAT', 'LON']].values)
+            tree = BallTree(port_lat_lon, metric='haversine')
+            dists, indices = tree.query(ship_lat_lon, k=1)
+            threshold_rad = np.radians(0.2)
+            dists = dists.flatten()
+            indices = indices.flatten()
+            valid_mask = dists <= threshold_rad
+            subset_idx = df.index[stops_mask]
+            final_match_idx = subset_idx[valid_mask]
+            final_port_idx = indices[valid_mask]
+            if len(final_match_idx) > 0:
+                matched_ports = port_data.iloc[final_port_idx]
+                df.loc[final_match_idx, 'PortName'] = matched_ports['Main Port Name'].values
+                df.loc[final_match_idx, 'State'] = matched_ports['state'].values
+
+        for c in _OUT_COLS:
+            if c not in df.columns:
+                df[c] = None
+        return df[_OUT_COLS]
+    except Exception:
+        return pd.DataFrame(columns=_OUT_COLS)
+
 
 def process_all_data(input_file, output_file, port_data, usa_states):
-    """
-    Reads combined data, calculates emissions per group, performs spatial join, and saves.
-    """
     print(f"Reading {input_file}...")
     try:
         df = pd.read_csv(input_file)
@@ -136,53 +152,16 @@ def process_all_data(input_file, output_file, port_data, usa_states):
         print(f"Error: {e}")
         return
 
-    print("Calculating emissions per vessel...")
-    tqdm.pandas(desc="Vessel Calc")
-
-    df = df.groupby('MMSI', group_keys=False).parallel_apply(calculate_co2_per_ship)
-
-    print("Mapping coordinates to States (Spatial Join)...")
-    geometry = [Point(xy) for xy in zip(df['LON'], df['LAT'])]
-    gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
-
-    gdf_joined = gpd.sjoin(gdf, usa_states, how='left', predicate='intersects')
-
-    if 'name' in gdf_joined.columns:
-        df['State'] = gdf_joined['name']
-    else:
-        df['State'] = None
-
-    print("Matching Stop points to Ports (Fast Vectorized)...")
-    stops_mask = df['Label'] == '1'
-
-    if stops_mask.any():
-        port_lat_lon = np.radians(port_data[['Latitude', 'Longitude']].values)
-        ship_lat_lon = np.radians(df.loc[stops_mask, ['LAT', 'LON']].values)
-        tree = BallTree(port_lat_lon, metric='haversine')
-
-        print(f"Querying nearest ports for {len(ship_lat_lon)} stops...")
-        dists, indices = tree.query(ship_lat_lon, k=1)
-        threshold_rad = np.radians(0.2)
-
-        dists = dists.flatten()
-        indices = indices.flatten()
-        valid_mask = dists <= threshold_rad
-
-        subset_idx = df.index[stops_mask]
-
-        final_match_idx = subset_idx[valid_mask]
-        final_port_idx = indices[valid_mask]
-
-        if len(final_match_idx) > 0:
-            matched_ports = port_data.iloc[final_port_idx]
-
-            df.loc[final_match_idx, 'PortName'] = matched_ports['Main Port Name'].values
-            df.loc[final_match_idx, 'State'] = matched_ports['state'].values
+    print("Processing per vessel...")
+    result = df.groupby('MMSI', group_keys=False).apply(
+        lambda g: process_single_vessel(g, usa_states, port_data)
+    )
 
     print(f"Saving to {output_file}...")
-    cols = [c for c in df.columns if c != 'geometry']
-    df[cols].to_csv(output_file, index=False)
+    cols = [c for c in result.columns if c != 'geometry']
+    result[cols].to_csv(output_file, index=False)
     print("Step 2 Complete.")
+
 
 if __name__ == "__main__":
     YEAR = 2024
