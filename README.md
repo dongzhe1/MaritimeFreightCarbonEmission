@@ -174,6 +174,63 @@ The `Carbon_Transfer.parquet` is in long format (one row per state pair). To rep
 > **Note:** The parameter names `thre_sail` and `thre_stop` appear to be swapped in the original paper's *Code availability* section. The values and intended meanings above follow the paper's methodology description.
 
 ---
+## HPC Pipeline (SLURM)
+
+For large-scale processing on a SLURM-based HPC cluster with a Lustre shared filesystem. No HDFS or Spark required — parallelism comes from SLURM array jobs (one per month) and `multiprocessing.Pool` (one process per CPU core within each job).
+
+### Overall workflow
+
+```
+submit_download.slurm   ← download raw CSVs to Lustre (once per year)
+        │
+submit_process.slurm    ← array job, 12 tasks (one per month), each uses 48 cores
+  task 1  → Ship_Routes_01.parquet, Carbon_Transfer_01.parquet
+  task 2  → Ship_Routes_02.parquet, Carbon_Transfer_02.parquet
+  ...
+        │
+submit_merge.slurm      ← merge monthly parquets into annual outputs
+```
+
+### Setup on the cluster
+
+```bash
+module load Python/3.11
+python -m venv .venv
+source .venv/bin/activate
+pip install pandas geopandas shapely numpy scikit-learn tqdm requests pyarrow
+```
+
+Upload project files and auxiliary data (`usa_port_data.csv`, `map_data/`) to your scratch directory.
+
+### Step 1 — Download AIS data
+
+Edit `YEARS` and `LUSTRE_BASE` in `submit_download.slurm`, then:
+
+```bash
+sbatch slurm/submit_download.slurm
+```
+
+Downloads all daily zip files in parallel (16 threads by default), extracts CSVs directly to Lustre.
+
+### Step 2 — Process monthly data
+
+Edit `YEAR`, `LUSTRE_AIS`, `LUSTRE_OUTPUT`, and `AUX_DATA_DIR` in `submit_process.slurm`, then:
+
+```bash
+PROCESS_JOB=$(sbatch --parsable slurm/submit_process.slurm)
+```
+
+Runs 12 simultaneous jobs (one per month). Each job uses all 48 cores on its node via `multiprocessing.Pool`. The month number is read automatically from `$SLURM_ARRAY_TASK_ID`.
+
+### Step 3 — Merge annual results
+
+```bash
+sbatch --dependency=afterok:$PROCESS_JOB slurm/submit_merge.slurm
+```
+
+The `--dependency` flag ensures the merge job only starts after all 12 monthly jobs succeed. Produces `Ship_Routes.parquet` and `Carbon_Transfer.parquet` in `LUSTRE_OUTPUT/<YEAR>/`.
+
+---
 
 ## Dependencies
 
@@ -186,8 +243,8 @@ scikit-learn
 tqdm
 pyspark          # Spark only
 venv-pack        # Spark only
-pyarrow          # Spark only
-requests         # Spark only
+pyarrow
+requests
 ```
 
 Install:
