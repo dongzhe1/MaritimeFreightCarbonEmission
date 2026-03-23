@@ -1,5 +1,26 @@
 # Maritime Freight Carbon Emission & Transfer Analysis
 
+## Table of Contents
+
+- [Prerequisites — External Data](#prerequisites--external-data)
+- [Project Structure](#project-structure)
+- [Single-Machine Pipeline (Validation)](#single-machine-pipeline-validation)
+  - [Step 0 — process_wpi.py](#step-0--process_wpipy-run-once)
+  - [Step 1 — step1_preprocess.py](#step-1--step1_preprocesspy)
+  - [Step 2 — step2_calculate.py](#step-2--step2_calculatepy)
+  - [Step 3 — step3_transfer.py](#step-3--step3_transferpy)
+- [Spark Pipeline (Distributed)](#spark-pipeline-distributed)
+  - [Download to HDFS](#download-to-hdfs-with-spark)
+  - [Submit main job](#submit)
+- [HPC Pipeline (SLURM)](#hpc-pipeline-slurm)
+  - [Step 1 — Download](#step-1--download-ais-data)
+  - [Step 2 — Process](#step-2--process-monthly-data)
+  - [Step 3 — Merge](#step-3--merge-annual-results)
+- [Key Parameters](#key-parameters)
+- [Dependencies](#dependencies)
+
+---
+
 This project reproduces the methodology described in:
 
 > Cheng, C., Li, Z., Yan, Y., Cui, Q., Zhang, Y., & Liu, L. (2024). **Maritime Freight Carbon Emission in the U.S. using AIS data from 2018 to 2022.** *Scientific Data*, 11, 542. https://doi.org/10.1038/s41597-024-03391-0
@@ -36,17 +57,27 @@ Three external datasets must be downloaded before running the pipeline.
 ```
 MaritimeFreightCarbonEmission/
 ├── raw_data/
-│   └── 2024/               ← daily AIS CSV files (single machine)
-├── map_data/               ← extracted Natural Earth shapefile
+│   └── 2024/                    ← daily AIS CSV files (single machine)
+├── map_data/                    ← extracted Natural Earth shapefile
 ├── data_processed/
-│   └── 2024/               ← intermediate and final outputs (single machine)
-├── process_wpi.py          ← one-time aux data preparation
-├── step1_preprocess.py     ← data cleaning and smoothing
-├── step2_calculate.py      ← stop identification, emission calculation, spatial join
-├── step3_transfer.py       ← route segmentation and carbon transfer matrix
-├── main_spark.py           ← distributed Spark job (replaces steps 1–3)
+│   └── 2024/                    ← intermediate and final outputs (single machine)
+├── slurm/
+│   ├── submit_download.slurm    ← download AIS data to Lustre
+│   ├── submit_process.slurm     ← monthly array job (HPC pipeline)
+│   └── submit_merge.slurm       ← merge monthly outputs into annual files
+├── process_wpi.py               ← one-time aux data preparation
+├── step1_preprocess.py          ← data cleaning and smoothing (shared logic)
+├── step2_calculate.py           ← stop identification, emission calculation, spatial join (shared logic)
+├── step3_transfer.py            ← route segmentation and carbon transfer matrix (shared logic)
+├── download_hpc.py              ← parallel AIS downloader for HPC (Lustre)
+├── download_spark.py            ← parallel AIS downloader for Spark (HDFS)
+├── main_hpc.py                  ← HPC job: monthly processing + annual merge
+├── main_spark.py                ← Spark job: distributed processing (HDFS)
+├── requirement.txt
 └── WPI.csv
 ```
+
+> `step1_preprocess.py`, `step2_calculate.py`, and `step3_transfer.py` contain the core business logic and are shared across all three pipelines (single machine, Spark, HPC). The `main_*.py` files are thin orchestration wrappers that call into these modules.
 
 ---
 
