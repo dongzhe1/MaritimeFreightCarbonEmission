@@ -15,7 +15,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=360G
+#SBATCH --mem=64G
 #SBATCH --array=1-12
 #SBATCH --account=${your_resource_id}
 #SBATCH --partition=cpu
