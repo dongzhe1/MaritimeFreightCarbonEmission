@@ -24,7 +24,7 @@
 #SBATCH --partition=cpu
 
 # ---- user settings ----------------------------------------
-YEAR=2024
+YEAR=${YEAR:-2024}
 LUSTRE_OUTPUT="$SCRATCH/ais/output"
 PROJECT_DIR="$SCRATCH/MaritimeFreightCarbonEmission"
 # -----------------------------------------------------------
