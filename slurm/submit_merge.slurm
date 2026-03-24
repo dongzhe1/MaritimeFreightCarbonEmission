@@ -25,7 +25,7 @@
 
 # ---- user settings ----------------------------------------
 YEAR=${YEAR:-2024}
-LUSTRE_OUTPUT="$SCRATCH/ais/output"
+LUSTRE_OUTPUT="$GROUP_DIR/ais/output"
 PROJECT_DIR="$SCRATCH/MaritimeFreightCarbonEmission"
 # -----------------------------------------------------------
 
