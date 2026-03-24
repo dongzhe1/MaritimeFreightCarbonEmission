@@ -11,6 +11,7 @@
 # Or manually after verifying all months are done:
 #   sbatch submit_merge.slurm
 # ============================================================
+
 #SBATCH --job-name=ais_merge
 #SBATCH --output=logs/merge_%j.out
 #SBATCH --error=logs/merge_%j.err
@@ -19,17 +20,19 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
+#SBATCH --partition=cpu
 
 # ---- user settings ----------------------------------------
 YEAR=2024
-LUSTRE_OUTPUT="/scratch/$USER/ais/output"
+LUSTRE_OUTPUT="$SCRATCH/ais/output"
 PROJECT_DIR="$SCRATCH/MaritimeFreightCarbonEmission"
 # -----------------------------------------------------------
 
 mkdir -p logs
 
 module purge
-module load Python/3.11
+module load GCCcore/13.2.0
+module load Python/3.11.5
 
 source "$PROJECT_DIR/.venv/bin/activate"
 
@@ -37,7 +40,7 @@ echo "Merging year=$YEAR on $(hostname)"
 
 python "$PROJECT_DIR/main_hpc.py" \
     --year "$YEAR" \
-    --lustre-ais-dir   "unused" \
+    --lustre-ais-dir    "unused" \
     --lustre-output-dir "$LUSTRE_OUTPUT" \
-    --aux-data-dir     "unused" \
+    --aux-data-dir      "unused" \
     --merge
