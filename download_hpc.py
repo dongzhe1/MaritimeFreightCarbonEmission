@@ -2,50 +2,54 @@ import os
 import argparse
 import warnings
 import datetime
-import tempfile
+import io
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings('ignore')
-
 import requests
 
 
 def download_one_day(task):
-    year        = task['year']
-    date_str    = task['date_str']
-    output_dir  = task['output_dir']
+    year       = task['year']
+    date_str   = task['date_str']
+    output_dir = task['output_dir']
 
-    base_url    = f"https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{year}"
-    zip_name    = f"AIS_{date_str}.zip"
-    url         = f"{base_url}/{zip_name}"
+    base_url = f"https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{year}"
+    zip_name = f"AIS_{date_str}.zip"
+    url      = f"{base_url}/{zip_name}"
+
+    csv_name = f"AIS_{date_str}.csv"
+    dest = os.path.join(output_dir, csv_name)
+    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+        return f"SKIPPED: {zip_name}"
 
     try:
         with requests.Session() as session:
             with session.get(url, stream=True, timeout=60) as response:
                 response.raise_for_status()
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    local_zip = os.path.join(tmpdir, zip_name)
-                    with open(local_zip, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192 * 4):
-                            f.write(chunk)
 
-                    uploaded = False
-                    with zipfile.ZipFile(local_zip, 'r') as zip_ref:
-                        for filename in zip_ref.namelist():
-                            if filename.endswith('.csv'):
-                                dest = os.path.join(output_dir, filename)
-                                with zip_ref.open(filename) as src, open(dest, 'wb') as dst:
-                                    while True:
-                                        chunk = src.read(1024 * 1024)
-                                        if not chunk:
-                                            break
-                                        dst.write(chunk)
-                                uploaded = True
+                buf = io.BytesIO()
+                for chunk in response.iter_content(chunk_size=8192 * 4):
+                    buf.write(chunk)
+                buf.seek(0)
 
-                    if uploaded:
-                        return f"SUCCESS: {zip_name}"
-                    return f"FAILED: {zip_name} | Error: No CSV found in zip"
+                uploaded = False
+                with zipfile.ZipFile(buf) as zip_ref:
+                    for filename in zip_ref.namelist():
+                        if filename.endswith('.csv'):
+                            dest = os.path.join(output_dir, filename)
+                            with zip_ref.open(filename) as src, open(dest, 'wb') as dst:
+                                while True:
+                                    chunk = src.read(1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    dst.write(chunk)
+                            uploaded = True
+
+                if uploaded:
+                    return f"SUCCESS: {zip_name}"
+                return f"FAILED: {zip_name} | Error: No CSV found in zip"
 
     except Exception as e:
         return f"FAILED: {zip_name} | Error: {str(e)}"
@@ -60,7 +64,6 @@ def run(years, lustre_base_dir, max_workers):
 
         start_date = datetime.date(year, 1, 1)
         end_date   = datetime.date(year, 12, 31)
-        delta      = datetime.timedelta(days=1)
 
         tasks = []
         curr = start_date
@@ -70,29 +73,29 @@ def run(years, lustre_base_dir, max_workers):
                 'date_str':   curr.strftime("%Y_%m_%d"),
                 'output_dir': output_dir,
             })
-            curr += delta
+            curr += datetime.timedelta(days=1)
 
-        success = 0
+        success = skipped = failed = 0
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(download_one_day, t): t for t in tasks}
             for future in as_completed(futures):
                 result = future.result()
                 if result.startswith("SUCCESS"):
                     success += 1
+                elif result.startswith("SKIPPED"):
+                    skipped += 1
                 else:
+                    failed += 1
                     print(result)
 
-        print(f"Year {year} summary: {success}/{len(tasks)} files downloaded.")
+        print(f"Year {year}: {success} downloaded, {skipped} skipped, {failed} failed / {len(tasks)} total")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parallel AIS Data Downloader for HPC (Lustre)")
-    parser.add_argument("--years",          nargs="+", type=int, required=True,
-                        help="Years to download, e.g. --years 2022 2023 2024")
-    parser.add_argument("--lustre-base-dir", required=True,
-                        help="Lustre root directory, e.g. /scratch/user/ais")
-    parser.add_argument("--max-workers",    type=int, default=16,
-                        help="Number of parallel download threads (default: 16)")
+    parser.add_argument("--years",           nargs="+", type=int, required=True)
+    parser.add_argument("--lustre-base-dir", required=True)
+    parser.add_argument("--max-workers",     type=int, default=16)
     args = parser.parse_args()
 
     run(args.years, args.lustre_base_dir, args.max_workers)
