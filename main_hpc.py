@@ -3,6 +3,7 @@ import argparse
 import warnings
 import glob
 import multiprocessing as mp
+import traceback
 
 import pandas as pd
 import geopandas as gpd
@@ -36,11 +37,18 @@ def _process_one_mmsi(args):
         df = process_single_vessel(df, _worker_states, _worker_ports)
         routes, transfers = process_route_group(df, year)
         return routes, transfers
-    except Exception:
+    except Exception as e:
+        print(f"  [WARN] MMSI {mmsi} failed: {e}\n{traceback.format_exc()}")
         return [], []
 
 
 def process_month(year, month, lustre_ais_dir, lustre_output_dir, aux_data_dir, n_workers):
+    out_dir = os.path.join(lustre_output_dir, str(year))
+    if os.path.exists(os.path.join(out_dir, f"Ship_Routes_{month:02d}.parquet")) and \
+       os.path.exists(os.path.join(out_dir, f"Carbon_Transfer_{month:02d}.parquet")):
+        print(f"[{year}-{month:02d}] Already done, skipping.")
+        return
+
     pattern = os.path.join(lustre_ais_dir, str(year), f"AIS_{year}_{month:02d}_*.csv")
     files   = sorted(glob.glob(pattern))
     if not files:
@@ -51,7 +59,8 @@ def process_month(year, month, lustre_ais_dir, lustre_output_dir, aux_data_dir, 
     chunks = []
     for f in files:
         try:
-            df = pd.read_csv(f, low_memory=False)
+            df = pd.read_csv(f, low_memory=False,
+                             usecols=['MMSI', 'BaseDateTime', 'LAT', 'LON', 'SOG', 'VesselType'])
             df['BaseDateTime'] = pd.to_datetime(df['BaseDateTime'])
             mask = df['VesselType'].between(70, 89)
             chunks.append(df[mask])
@@ -63,24 +72,30 @@ def process_month(year, month, lustre_ais_dir, lustre_output_dir, aux_data_dir, 
         return
 
     full_df = pd.concat(chunks, ignore_index=True)
+    del chunks
+    n_vessels = full_df['MMSI'].nunique()
     print(f"[{year}-{month:02d}] {len(full_df)} records, "
-          f"{full_df['MMSI'].nunique()} vessels. Starting pool...")
+          f"{n_vessels} vessels. Starting pool...")
 
     groups = [(mmsi, grp.copy(), year)
               for mmsi, grp in full_df.groupby('MMSI')]
+    del full_df
 
     all_routes    = []
     all_transfers = []
+    chunksize = max(1, len(groups) // (n_workers * 4))
 
     with mp.Pool(processes=n_workers,
                  initializer=_init_worker,
                  initargs=(aux_data_dir,)) as pool:
-        for routes, transfers in pool.imap_unordered(_process_one_mmsi, groups,
-                                                      chunksize=10):
+        for i, (routes, transfers) in enumerate(
+            pool.imap_unordered(_process_one_mmsi, groups, chunksize=chunksize)
+        ):
             all_routes.extend(routes)
             all_transfers.extend(transfers)
+            if (i + 1) % 500 == 0:
+                print(f"  [{year}-{month:02d}] {i+1}/{len(groups)} vessels done...")
 
-    out_dir = os.path.join(lustre_output_dir, str(year))
     os.makedirs(out_dir, exist_ok=True)
 
     if all_routes:
