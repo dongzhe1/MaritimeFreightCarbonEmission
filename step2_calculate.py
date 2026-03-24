@@ -115,7 +115,7 @@ def process_single_vessel(df, gdf_states, port_data):
         joined = joined[~joined.index.duplicated(keep='first')]
         df = df.copy()
         df['State'] = joined['name'].values
-        df['PortName'] = np.nan
+        df['PortName'] = None
 
         stops_mask = df['Label'] == '1'
         if stops_mask.any():
@@ -132,8 +132,8 @@ def process_single_vessel(df, gdf_states, port_data):
             final_port_idx = indices[valid_mask]
             if len(final_match_idx) > 0:
                 matched_ports = port_data.iloc[final_port_idx]
-                df.loc[final_match_idx, 'PortName'] = matched_ports['Main Port Name'].values
-                df.loc[final_match_idx, 'State'] = matched_ports['state'].values
+                df.loc[final_match_idx, 'PortName'] = matched_ports['Main Port Name'].tolist()
+                df.loc[final_match_idx, 'State'] = matched_ports['state'].tolist()
 
         for c in _OUT_COLS:
             if c not in df.columns:

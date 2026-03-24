@@ -129,10 +129,10 @@ def merge_year(year, lustre_output_dir):
                       'End Port', 'End State', 'Total Emissions']
         state_cols = sorted([c for c in df_routes.columns if c not in fixed_cols])
         df_routes[state_cols] = df_routes[state_cols].fillna(0)
-        df_routes[fixed_cols + state_cols].to_parquet(
-            os.path.join(out_dir, "Ship_Routes.parquet"), index=False
+        df_routes[fixed_cols + state_cols].to_csv(
+            os.path.join(out_dir, "Ship_Routes.cvs"), index=False
         )
-        print(f"[{year}] Ship_Routes.parquet written ({len(df_routes)} routes)")
+        print(f"[{year}] Ship_Routes.csv written ({len(df_routes)} routes)")
 
     if transfer_files:
         df_flows = pd.concat([pd.read_parquet(f) for f in transfer_files], ignore_index=True)
@@ -145,10 +145,10 @@ def merge_year(year, lustre_output_dir):
         )
         df_matrix.rename(columns={'Source': 'States with carbon transfer out'}, inplace=True)
         df_matrix.insert(0, 'Year', year)
-        df_matrix.to_parquet(
-            os.path.join(out_dir, "Carbon_Transfer.parquet"), index=False
+        df_matrix.to_csv(
+            os.path.join(out_dir, "Carbon_Transfer.csv"), index=False
         )
-        print(f"[{year}] Carbon_Transfer.parquet written")
+        print(f"[{year}] Carbon_Transfer.csv written")
 
 
 if __name__ == "__main__":
