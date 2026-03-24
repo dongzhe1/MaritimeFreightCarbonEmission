@@ -121,8 +121,8 @@ def process_year(year, raw_ais_dir, output_dir, aux_data_dir, n_workers):
             [c for c in df_routes.columns if c not in fixed_cols]
         )
         df_routes[state_cols] = df_routes[state_cols].fillna(0)
-        df_routes[fixed_cols + state_cols].to_parquet(
-            os.path.join(year_dir, 'Ship_Routes.parquet'), index=False
+        df_routes[fixed_cols + state_cols].to_csv(
+            os.path.join(year_dir, 'Ship_Routes.csv'), index=False
         )
 
     if all_transfers:
@@ -142,8 +142,8 @@ def process_year(year, raw_ais_dir, output_dir, aux_data_dir, n_workers):
             inplace=True
         )
         df_matrix.insert(0, 'Year', year)
-        df_matrix.to_parquet(
-            os.path.join(year_dir, 'Carbon_Transfer.parquet'), index=False
+        df_matrix.to_csv(
+            os.path.join(year_dir, 'Carbon_Transfer.csv'), index=False
         )
 
     print(f"[{year}] Done. Output: {year_dir}")
