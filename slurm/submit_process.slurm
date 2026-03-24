@@ -14,9 +14,10 @@
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=96
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=360G
 #SBATCH --array=1-12
+#SBATCH --account=${your_resource_id}
 #SBATCH --partition=cpu
 
 # ---- user settings ----------------------------------------
@@ -25,7 +26,7 @@ LUSTRE_AIS="$SCRATCH/ais"
 LUSTRE_OUTPUT="$SCRATCH/ais/output"
 AUX_DATA_DIR="$SCRATCH/MaritimeFreightCarbonEmission"
 PROJECT_DIR="$SCRATCH/MaritimeFreightCarbonEmission"
-N_WORKERS=96
+N_WORKERS=32
 # -----------------------------------------------------------
 
 mkdir -p logs "$LUSTRE_OUTPUT/$YEAR"
