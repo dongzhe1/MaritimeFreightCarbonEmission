@@ -100,6 +100,7 @@ def process_month(year, month, lustre_ais_dir, lustre_output_dir, aux_data_dir, 
 
     if all_routes:
         df_routes = pd.DataFrame(all_routes)
+        df_routes['MMSI'] = pd.to_numeric(df_routes['MMSI'], errors='coerce')
         fixed_cols = ['Year', 'MMSI', 'Start Port', 'Start State',
                       'End Port', 'End State', 'Total Emissions']
         state_cols = sorted([c for c in df_routes.columns if c not in fixed_cols])
