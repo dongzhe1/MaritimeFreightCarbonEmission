@@ -130,7 +130,7 @@ def merge_year(year, lustre_output_dir):
         state_cols = sorted([c for c in df_routes.columns if c not in fixed_cols])
         df_routes[state_cols] = df_routes[state_cols].fillna(0)
         df_routes[fixed_cols + state_cols].to_csv(
-            os.path.join(out_dir, "Ship_Routes.cvs"), index=False
+            os.path.join(out_dir, "Ship_Routes.csv"), index=False
         )
         print(f"[{year}] Ship_Routes.csv written ({len(df_routes)} routes)")
 

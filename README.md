@@ -5,14 +5,10 @@
 - [Prerequisites — External Data](#prerequisites--external-data)
 - [Project Structure](#project-structure)
 - [Single-Machine Pipeline (Validation)](#single-machine-pipeline-validation)
-  - [Step 0 — process_wpi.py](#step-0--process_wpipy-run-once)
-  - [Step 1 — step1_preprocess.py](#step-1--step1_preprocesspy)
-  - [Step 2 — step2_calculate.py](#step-2--step2_calculatepy)
-  - [Step 3 — step3_transfer.py](#step-3--step3_transferpy)
 - [Spark Pipeline (Distributed)](#spark-pipeline-distributed)
-  - [Download to HDFS](#download-to-hdfs-with-spark)
-  - [Submit main job](#submit)
 - [HPC Pipeline (SLURM)](#hpc-pipeline-slurm)
+  - [Cluster Environment](#cluster-environment)
+  - [First-Time Setup](#first-time-setup)
   - [Step 1 — Download](#step-1--download-ais-data)
   - [Step 2 — Process](#step-2--process-monthly-data)
   - [Step 3 — Merge](#step-3--merge-annual-results)
@@ -37,6 +33,7 @@ Three external datasets must be downloaded before running the pipeline.
 - **Source:** [MarineCadastre.gov — Vessel Traffic Data](https://marinecadastre.gov/ais/) (U.S. Coast Guard / NOAA)
 - **What to download:** Daily CSV files for your target year via the bulk order site.
 - **Where to place (single machine):** `raw_data/<YEAR>/`
+- **Where to place (HPC):** Run `download_hpc.py` directly on the login node (see Step 1). Downloaded to `$SCRATCH/ais/<YEAR>/`.
 - **Where to place (Spark):** Upload to HDFS under the directory passed as `--hdfs-ais-dir`, one subdirectory per year (e.g. `hdfs:///ais/2024/`).
 - **Key fields used:** `MMSI`, `BaseDateTime`, `LAT`, `LON`, `SOG`, `VesselType`
 
@@ -48,7 +45,7 @@ Three external datasets must be downloaded before running the pipeline.
 ### C. World Port Index (WPI)
 - **Source:** [NGA World Port Index](https://msi.nga.mil/Publications/WPI)
 - **What to download:** The CSV version of the WPI publication.
-- **Where to place:** Save as `WPI.csv` in the project root.
+- **Where to place:** Save as `WPI.csv` in the project root. Run `process_wpi.py` once to generate `usa_port_data.csv`.
 
 ---
 
@@ -57,22 +54,22 @@ Three external datasets must be downloaded before running the pipeline.
 ```
 MaritimeFreightCarbonEmission/
 ├── raw_data/
-│   └── 2024/                    ← daily AIS CSV files (single machine)
-├── map_data/                    ← extracted Natural Earth shapefile
+│   └── 2024/                    <- daily AIS CSV files (single machine only)
+├── map_data/                    <- extracted Natural Earth shapefile
 ├── data_processed/
-│   └── 2024/                    ← intermediate and final outputs (single machine)
+│   └── 2024/                    <- intermediate and final outputs (single machine)
 ├── slurm/
-│   ├── submit_download.slurm    ← download AIS data to Lustre
-│   ├── submit_process.slurm     ← monthly array job (HPC pipeline)
-│   └── submit_merge.slurm       ← merge monthly outputs into annual files
-├── process_wpi.py               ← one-time aux data preparation
-├── step1_preprocess.py          ← data cleaning and smoothing (shared logic)
-├── step2_calculate.py           ← stop identification, emission calculation, spatial join (shared logic)
-├── step3_transfer.py            ← route segmentation and carbon transfer matrix (shared logic)
-├── download_hpc.py              ← parallel AIS downloader for HPC (Lustre)
-├── download_spark.py            ← parallel AIS downloader for Spark (HDFS)
-├── main_hpc.py                  ← HPC job: monthly processing + annual merge
-├── main_spark.py                ← Spark job: distributed processing (HDFS)
+│   ├── submit_download.slurm    <- download AIS data to Lustre
+│   ├── submit_process.slurm     <- monthly array job (HPC pipeline)
+│   └── submit_merge.slurm       <- merge monthly outputs into annual files
+├── process_wpi.py               <- one-time aux data preparation
+├── step1_preprocess.py          <- data cleaning and smoothing (shared logic)
+├── step2_calculate.py           <- stop identification, emission calculation, spatial join (shared logic)
+├── step3_transfer.py            <- route segmentation and carbon transfer matrix (shared logic)
+├── download_hpc.py              <- parallel AIS downloader for HPC (Lustre)
+├── download_spark.py            <- parallel AIS downloader for Spark (HDFS)
+├── main_hpc.py                  <- HPC job: monthly processing + annual merge
+├── main_spark.py                <- Spark job: distributed processing (HDFS)
 ├── requirement.txt
 └── WPI.csv
 ```
@@ -133,18 +130,18 @@ python step3_transfer.py
 
 ## Spark Pipeline (Distributed)
 
-`main_spark.py` consolidates steps 1–3 into a single distributed job. It imports the core per-vessel logic directly from the existing step files (`apply_median_filter`, `process_single_vessel`, `process_route_group`), so both pipelines share the same computation code.
+`main_spark.py` consolidates steps 1–3 into a single distributed job. It imports the core per-vessel logic directly from the existing step files, so both pipelines share the same computation code.
 
 ### Prerequisites
 
-1. Run `process_wpi.py` once on any machine to produce `usa_port_data.csv`.
-2. The driver node must have `usa_port_data.csv` and `map_data/` accessible on its **local filesystem** (the shapefile is broadcast to workers from the driver).
+1. Run `process_wpi.py` once to produce `usa_port_data.csv`.
+2. The driver node must have `usa_port_data.csv` and `map_data/` on its local filesystem (broadcast to workers from driver).
 3. AIS CSV files must be uploaded to HDFS, one subdirectory per year.
 
 ### Package the virtual environment
 
 ```bash
-module load python/3.x        # use your cluster's Modulair command
+module load python/3.x
 python -m venv myenv
 source myenv/bin/activate
 pip install -r requirement.txt
@@ -152,6 +149,7 @@ venv-pack -o myenv.tar.gz
 ```
 
 ### Download to HDFS with Spark
+
 ```bash
 spark-submit \
   --master yarn \
@@ -188,9 +186,112 @@ spark-submit \
 | File | Contents |
 |---|---|
 | `Ship_Routes.parquet` | One row per voyage: year, MMSI, start/end port and state, total emissions |
-| `Carbon_Transfer.parquet` | Long-format transfer flows: year, source\_state, dest\_state, amount |
+| `Carbon_Transfer.parquet` | Long-format transfer flows: year, source_state, dest_state, amount |
 
 The `Carbon_Transfer.parquet` is in long format (one row per state pair). To reproduce the paper's wide pivot matrix, read it into pandas and call `.pivot()`.
+
+---
+
+## HPC Pipeline (SLURM)
+
+For large-scale processing on ACES using SLURM and Lustre shared filesystem. No HDFS or Spark required. Parallelism comes from SLURM array jobs (one per month) and `multiprocessing.Pool` (one process per CPU core within each node).
+
+
+### First-Time Setup
+
+**1. Clone the project into scratch**
+
+```bash
+# On the login node
+mkdir -p $SCRATCH
+cd $SCRATCH
+git clone https://github.com/<your-username>/MaritimeFreightCarbonEmission.git
+cd MaritimeFreightCarbonEmission
+```
+
+**2. Build the virtual environment**
+
+```bash
+module load GCCcore/13.2.0
+module load Python/3.11.5
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirement.txt
+```
+
+**3. Create output directory**
+
+```bash
+mkdir -p $SCRATCH/ais
+```
+
+### Overall Workflow
+
+```
+python download_hpc.py --years <YEAR> --lustre-base-dir $SCRATCH/ais  <- run on login node (once per year)
+        |
+PROCESS_JOB=$(sbatch --parsable \
+  slurm/submit_process.slurm)             <- array job, 12 tasks (one per month), 96 cores each
+        |
+sbatch --dependency=afterok:$PROCESS_JOB \
+  slurm/submit_merge.slurm               <- merge monthly parquets into annual outputs
+```
+
+### Step 1 — Download AIS Data
+
+**Note:** ACES compute nodes do not have public internet access. Run the downloader directly on the login node.
+
+Edit `--years` and `--lustre-base-dir` as needed, then run in a `tmux` session so the download continues if your SSH connection drops:
+
+```bash
+mkdir -p logs
+tmux new -s download
+module load GCCcore/13.2.0
+module load Python/3.11.5
+source $SCRATCH/MaritimeFreightCarbonEmission/.venv/bin/activate
+
+python $SCRATCH/MaritimeFreightCarbonEmission/download_hpc.py \
+  --years 2024 \
+  --lustre-base-dir $SCRATCH/ais \
+  --max-workers 16
+```
+
+Or with `nohup` if `tmux` is unavailable:
+
+```bash
+nohup python $SCRATCH/MaritimeFreightCarbonEmission/download_hpc.py \
+  --years 2024 \
+  --lustre-base-dir $SCRATCH/ais \
+  --max-workers 16 \
+  > logs/download_2024.out 2>&1 &
+```
+
+Monitor:
+
+```bash
+tail -f logs/download_2024.out
+ls $SCRATCH/ais/2024/ | head -20
+```
+
+### Step 2 — Process Monthly Data
+
+Edit `YEAR`, `LUSTRE_AIS`, `LUSTRE_OUTPUT`, and `AUX_DATA_DIR` in `slurm/submit_process.slurm`, then:
+
+```bash
+PROCESS_JOB=$(sbatch --parsable slurm/submit_process.slurm)
+```
+
+Runs 12 simultaneous jobs (one per month). Each job requests 96 cores and uses `multiprocessing.Pool(96)`. The month number is read automatically from `$SLURM_ARRAY_TASK_ID`. Outputs monthly parquet files to `$LUSTRE_OUTPUT/<YEAR>/`.
+
+### Step 3 — Merge Annual Results
+
+```bash
+sbatch --dependency=afterok:$PROCESS_JOB slurm/submit_merge.slurm
+```
+
+Merges monthly parquet files into:
+- `Ship_Routes.csv` — one row per voyage
+- `Carbon_Transfer.csv` — state x state transfer matrix
 
 ---
 
@@ -205,63 +306,6 @@ The `Carbon_Transfer.parquet` is in long format (one row per state pair). To rep
 > **Note:** The parameter names `thre_sail` and `thre_stop` appear to be swapped in the original paper's *Code availability* section. The values and intended meanings above follow the paper's methodology description.
 
 ---
-## HPC Pipeline (SLURM)
-
-For large-scale processing on a SLURM-based HPC cluster with a Lustre shared filesystem. No HDFS or Spark required — parallelism comes from SLURM array jobs (one per month) and `multiprocessing.Pool` (one process per CPU core within each job).
-
-### Overall workflow
-
-```
-submit_download.slurm   ← download raw CSVs to Lustre (once per year)
-        │
-submit_process.slurm    ← array job, 12 tasks (one per month), each uses 48 cores
-  task 1  → Ship_Routes_01.parquet, Carbon_Transfer_01.parquet
-  task 2  → Ship_Routes_02.parquet, Carbon_Transfer_02.parquet
-  ...
-        │
-submit_merge.slurm      ← merge monthly parquets into annual outputs
-```
-
-### Setup on the cluster
-
-```bash
-module load Python/3.11
-python -m venv .venv
-source .venv/bin/activate
-pip install pandas geopandas shapely numpy scikit-learn tqdm requests pyarrow
-```
-
-Upload project files and auxiliary data (`usa_port_data.csv`, `map_data/`) to your scratch directory.
-
-### Step 1 — Download AIS data
-
-Edit `YEARS` and `LUSTRE_BASE` in `submit_download.slurm`, then:
-
-```bash
-sbatch slurm/submit_download.slurm
-```
-
-Downloads all daily zip files in parallel (16 threads by default), extracts CSVs directly to Lustre.
-
-### Step 2 — Process monthly data
-
-Edit `YEAR`, `LUSTRE_AIS`, `LUSTRE_OUTPUT`, and `AUX_DATA_DIR` in `submit_process.slurm`, then:
-
-```bash
-PROCESS_JOB=$(sbatch --parsable slurm/submit_process.slurm)
-```
-
-Runs 12 simultaneous jobs (one per month). Each job uses all 48 cores on its node via `multiprocessing.Pool`. The month number is read automatically from `$SLURM_ARRAY_TASK_ID`.
-
-### Step 3 — Merge annual results
-
-```bash
-sbatch --dependency=afterok:$PROCESS_JOB slurm/submit_merge.slurm
-```
-
-The `--dependency` flag ensures the merge job only starts after all 12 monthly jobs succeed. Produces `Ship_Routes.parquet` and `Carbon_Transfer.parquet` in `LUSTRE_OUTPUT/<YEAR>/`.
-
----
 
 ## Dependencies
 
@@ -272,10 +316,10 @@ shapely
 numpy
 scikit-learn
 tqdm
-pyspark          # Spark only
-venv-pack        # Spark only
-pyarrow
 requests
+pyarrow
+pyspark          # Spark pipeline only
+venv-pack        # Spark pipeline only
 ```
 
 Install:

@@ -1,6 +1,7 @@
 import os
 import argparse
 import warnings
+import json
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -42,12 +43,15 @@ OUTPUT_SCHEMA = StructType([
     StructField("end_port",        StringType(),  True),
     StructField("end_state",       StringType(),  True),
     StructField("total_emissions", DoubleType(),  True),
+    StructField("state_emissions", StringType(),  True),
     StructField("transfer_source", StringType(),  True),
     StructField("transfer_dest",   StringType(),  True),
     StructField("transfer_amount", DoubleType(),  True),
 ])
 
-_OUTPUT_COLS = [f.name for f in OUTPUT_SCHEMA.fields]
+_OUTPUT_COLS  = [f.name for f in OUTPUT_SCHEMA.fields]
+_FIXED_ROUTE_COLS = {'Year', 'MMSI', 'Start Port', 'Start State',
+                     'End Port', 'End State', 'Total Emissions'}
 
 
 def extract_routes_and_transfers(df, year):
@@ -57,6 +61,7 @@ def extract_routes_and_transfers(df, year):
 
     rows = []
     for r in routes:
+        state_cols = {k: float(v) for k, v in r.items() if k not in _FIXED_ROUTE_COLS}
         rows.append({
             'record_type':     'route',
             'year':            int(r['Year']),
@@ -66,6 +71,7 @@ def extract_routes_and_transfers(df, year):
             'end_port':        r['End Port'],
             'end_state':       r['End State'],
             'total_emissions': float(r['Total Emissions']),
+            'state_emissions': json.dumps(state_cols) if state_cols else None,
             'transfer_source': None,
             'transfer_dest':   None,
             'transfer_amount': 0.0,
@@ -80,6 +86,7 @@ def extract_routes_and_transfers(df, year):
             'end_port':        None,
             'end_state':       None,
             'total_emissions': 0.0,
+            'state_emissions': None,
             'transfer_source': str(src),
             'transfer_dest':   str(dst),
             'transfer_amount': float(amt),
@@ -93,8 +100,11 @@ def run(spark, years, hdfs_ais_dir, aux_data_dir, hdfs_output_dir):
         os.path.join(aux_data_dir, 'map_data', 'ne_110m_admin_1_states_provinces.shp')
     ).to_crs("EPSG:4326")
 
-    bc_ports  = spark.sparkContext.broadcast(port_data)
-    bc_states = spark.sparkContext.broadcast(gdf_states)
+    bc_ports = spark.sparkContext.broadcast(port_data)
+
+    states_df = pd.DataFrame(gdf_states.drop(columns='geometry'))
+    states_df['geometry_wkb'] = gdf_states['geometry'].apply(lambda g: g.wkb_hex)
+    bc_states = spark.sparkContext.broadcast(states_df)
 
     for year in years:
         print(f"=== Processing year {year} ===")
@@ -102,16 +112,32 @@ def run(spark, years, hdfs_ais_dir, aux_data_dir, hdfs_output_dir):
         output_path = f"{hdfs_output_dir}/{year}"
 
         raw_df = (
-            spark.read.csv(input_path, header=True, inferSchema=True)
+            spark.read.csv(input_path, header=True, inferSchema=False)
+            .select(
+                col("MMSI").cast(LongType()),
+                col("BaseDateTime"),
+                col("LAT").cast(DoubleType()),
+                col("LON").cast(DoubleType()),
+                col("SOG").cast(DoubleType()),
+                col("VesselType").cast(IntegerType()),
+            )
             .withColumn("BaseDateTime", to_timestamp("BaseDateTime"))
             .filter(col("VesselType").between(70, 89))
             .repartition(col("MMSI"))
         )
 
         def traj_udf(df):
+            from shapely import wkb as shp_wkb
+            states_raw = bc_states.value.copy()
+            states_raw['geometry'] = states_raw['geometry_wkb'].apply(
+                lambda h: shp_wkb.loads(bytes.fromhex(h))
+            )
+            gdf = gpd.GeoDataFrame(
+                states_raw.drop(columns='geometry_wkb'), geometry='geometry', crs='EPSG:4326'
+            )
             if len(df) > 3:
                 df = apply_median_filter(df)
-            return process_single_vessel(df, bc_states.value, bc_ports.value)
+            return process_single_vessel(df, gdf, bc_ports.value)
 
         traj_df = (
             raw_df
@@ -135,7 +161,7 @@ def run(spark, years, hdfs_ais_dir, aux_data_dir, hdfs_output_dir):
             combined_df
             .filter(col("record_type") == "route")
             .select("year", "mmsi", "start_port", "start_state",
-                    "end_port", "end_state", "total_emissions")
+                    "end_port", "end_state", "total_emissions", "state_emissions")
             .write.mode("overwrite")
             .parquet(f"{output_path}/Ship_Routes.parquet")
         )
